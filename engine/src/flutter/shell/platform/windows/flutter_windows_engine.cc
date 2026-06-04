@@ -70,7 +70,7 @@ FlutterRendererConfig GetOpenGLRendererConfig() {
     if (!host->egl_manager()) {
       return false;
     }
-    return host->egl_manager()->render_context()->ClearCurrent();
+    return host->egl_manager()->render_context()->MakeCurrent();
   };
   config.open_gl.present = [](void* user_data) -> bool { FML_UNREACHABLE(); };
   config.open_gl.fbo_reset_after_present = true;
