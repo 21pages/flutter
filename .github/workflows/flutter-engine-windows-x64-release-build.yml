@@ -36,6 +36,24 @@ jobs:
         run: |
           Copy-Item -Path "engine\scripts\standard.gclient" -Destination ".gclient" -Force
           gclient sync -D
+          $dartRevision = (Select-String -Path "DEPS" -Pattern "'dart_revision': '([^']+)'").Matches[0].Groups[1].Value
+          $currentDartRevision = git -C "engine\src\flutter\third_party\dart" rev-parse HEAD
+          Write-Host "Expected Dart SDK revision: $dartRevision"
+          Write-Host "Current Dart SDK revision: $currentDartRevision"
+          if ($currentDartRevision -ne $dartRevision) {
+            git -C "engine\src\flutter\third_party\dart" fetch origin $dartRevision
+            if ($LASTEXITCODE -ne 0) {
+              git -C "engine\src\flutter\third_party\dart" fetch origin main
+            }
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to fetch Dart SDK revision $dartRevision"
+            }
+            git -C "engine\src\flutter\third_party\dart" checkout --detach $dartRevision
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to checkout Dart SDK revision $dartRevision"
+            }
+          }
+          git -C "engine\src\flutter\third_party\dart" rev-parse HEAD
 
       - name: Apply Windows 7 Dart patches
         run: |
