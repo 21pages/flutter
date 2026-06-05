@@ -147,6 +147,10 @@ source_set("flutter_windows_source") {
     "windowsx_shim.h",
   ]
 
+  if (current_cpu == "x64") {
+    sources += [ "win7_atomic_wait_shim.cc" ]
+  }
+
   libs = [
     "dwmapi.lib",
     "imm32.lib",

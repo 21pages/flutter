@@ -78,7 +78,13 @@ jobs:
             ".\out\host_release\gen_snapshot.exe"
           )
           $blockedImports = @(
-            "GetCurrentThreadStackLimits"
+            "GetCurrentThreadStackLimits",
+            "WaitOnAddress",
+            "WakeByAddressSingle",
+            "WakeByAddressAll"
+          )
+          $blockedImportDlls = @(
+            "api-ms-win-core-synch-l1-2-0.dll"
           )
 
           $failed = $false
@@ -96,6 +102,13 @@ jobs:
             foreach ($blockedImport in $blockedImports) {
               if ($imports -match "Symbol:\s+$([regex]::Escape($blockedImport))\b") {
                 Write-Error "$binary imports $blockedImport, which is not available on Windows 7."
+                $failed = $true
+              }
+            }
+
+            foreach ($blockedImportDll in $blockedImportDlls) {
+              if ($imports -match "Name:\s+$([regex]::Escape($blockedImportDll))\b") {
+                Write-Error "$binary imports $blockedImportDll, which is not available on Windows 7."
                 $failed = $true
               }
             }
