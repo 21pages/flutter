@@ -114,7 +114,8 @@ if (-not (Test-Path -LiteralPath $requiredFile)) {
 $patches = @(
   "0001-revert-platform-win-hostname.patch",
   "0002-win7-load-unwinding-records-api-dynamically.patch",
-  "0003-remove-pathcch-dependency-from-file-win.patch"
+  "0003-remove-pathcch-dependency-from-file-win.patch",
+  "0004-win7-load-thread-stack-limits-api-dynamically.patch"
 )
 
 Push-Location $dartSdk

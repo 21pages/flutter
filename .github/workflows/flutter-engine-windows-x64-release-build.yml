@@ -65,6 +65,46 @@ jobs:
           python .\flutter\tools\gn --runtime-mode=release --no-prebuilt-dart-sdk
           ninja -C .\out\host_release
 
+      - name: Verify Windows 7 compatible imports
+        working-directory: engine/src
+        run: |
+          $readobj = ".\flutter\buildtools\windows-x64\clang\bin\llvm-readobj.exe"
+          if (-not (Test-Path -LiteralPath $readobj)) {
+            $readobj = "llvm-readobj"
+          }
+
+          $binaries = @(
+            ".\out\host_release\flutter_windows.dll",
+            ".\out\host_release\gen_snapshot.exe"
+          )
+          $blockedImports = @(
+            "GetCurrentThreadStackLimits"
+          )
+
+          $failed = $false
+          foreach ($binary in $binaries) {
+            if (-not (Test-Path -LiteralPath $binary)) {
+              throw "Build output not found: $binary"
+            }
+
+            $imports = & $readobj --coff-imports $binary 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host $imports
+              throw "Failed to read imports for $binary"
+            }
+
+            foreach ($blockedImport in $blockedImports) {
+              if ($imports -match "Symbol:\s+$([regex]::Escape($blockedImport))\b") {
+                Write-Error "$binary imports $blockedImport, which is not available on Windows 7."
+                $failed = $true
+              }
+            }
+          }
+
+          if ($failed) {
+            throw "Windows 7 incompatible imports were found."
+          }
+
       - name: Package build outputs
         working-directory: engine/src
         run: |

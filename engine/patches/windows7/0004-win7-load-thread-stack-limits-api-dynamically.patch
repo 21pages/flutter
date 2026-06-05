@@ -1,0 +1,59 @@
+diff --git a/runtime/vm/os_thread_win.cc b/runtime/vm/os_thread_win.cc
+index 0f0745d..613506d 100644
+--- a/runtime/vm/os_thread_win.cc
++++ b/runtime/vm/os_thread_win.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "vm/os_thread.h"
+ 
++#include <libloaderapi.h>
+ #include <process.h>
+ #include <processthreadsapi.h>
+ 
+@@ -39,6 +40,21 @@ DEFINE_FLAG(int,
+ // TODO(zra): Remove once VM shuts down cleanly.
+ bool private_flag_windows_run_tls_destructors = true;
+ 
++typedef VOID(WINAPI* GetCurrentThreadStackLimitsFunc)(PULONG_PTR low_limit,
++                                                      PULONG_PTR high_limit);
++
++static GetCurrentThreadStackLimitsFunc GetCurrentThreadStackLimitsDynamic() {
++  static GetCurrentThreadStackLimitsFunc func = [] {
++    HMODULE kernel32 = ::GetModuleHandleW(L"kernel32.dll");
++    if (kernel32 == nullptr) {
++      return static_cast<GetCurrentThreadStackLimitsFunc>(nullptr);
++    }
++    return reinterpret_cast<GetCurrentThreadStackLimitsFunc>(
++        ::GetProcAddress(kernel32, "GetCurrentThreadStackLimits"));
++  }();
++  return func;
++}
++
+ class ThreadStartData {
+  public:
+   ThreadStartData(const char* name,
+@@ -151,10 +166,20 @@ ThreadId OSThread::ThreadIdFromIntPtr(intptr_t id) {
+ }
+ 
+ bool OSThread::GetCurrentStackBounds(uword* lower, uword* upper) {
+-  // PULONG and uword are sometimes different fundamental types.
+-  ::GetCurrentThreadStackLimits(reinterpret_cast<PULONG_PTR>(lower),
+-                                reinterpret_cast<PULONG_PTR>(upper));
+-  return true;
++  auto get_current_thread_stack_limits = GetCurrentThreadStackLimitsDynamic();
++  if (get_current_thread_stack_limits != nullptr) {
++    // PULONG and uword are sometimes different fundamental types.
++    get_current_thread_stack_limits(reinterpret_cast<PULONG_PTR>(lower),
++                                    reinterpret_cast<PULONG_PTR>(upper));
++    return true;
++  }
++
++  // GetCurrentThreadStackLimits is not available on Windows 7. The NT_TIB is
++  // the first field of the TEB and has provided the same stack bounds since NT.
++  PNT_TIB tib = reinterpret_cast<PNT_TIB>(NtCurrentTeb());
++  *lower = reinterpret_cast<uword>(tib->StackLimit);
++  *upper = reinterpret_cast<uword>(tib->StackBase);
++  return true;
+ }
+ 
+ #if defined(USING_SAFE_STACK)
