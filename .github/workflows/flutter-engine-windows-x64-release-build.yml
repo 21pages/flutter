@@ -24,7 +24,18 @@ jobs:
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
 
       - name: Install Depot Tools
-        uses: newkdev/setup-depot-tools@v1.0.1
+        shell: powershell
+        run: |
+          $depotTools = Join-Path $env:RUNNER_TEMP "depot_tools"
+          if (Test-Path -LiteralPath $depotTools) {
+            Remove-Item -LiteralPath $depotTools -Recurse -Force
+          }
+          New-Item -Path $depotTools -ItemType Directory -Force | Out-Null
+          $zipPath = Join-Path $env:RUNNER_TEMP "depot_tools.zip"
+          Invoke-WebRequest -Uri "https://storage.googleapis.com/chrome-infra/depot_tools.zip" -OutFile $zipPath
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $depotTools -Force
+          $depotTools | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "DEPOT_TOOLS=$depotTools" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Set environment variables
         run: |
