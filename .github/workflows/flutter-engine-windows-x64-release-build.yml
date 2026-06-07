@@ -4,20 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       runner:
-        description: Runner label for the Windows engine build.
+        description: Self-hosted runner labels for the Windows engine build.
         required: true
-        default: windows-2022
+        default: '["self-hosted","windows","vs2019"]'
       vs_installation_path:
         description: Visual Studio installation path on the runner.
         required: true
-        default: C:\Program Files\Microsoft Visual Studio\2022\Enterprise
+        default: C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise
 
 permissions:
   contents: write
 
 jobs:
   build-engine:
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ fromJSON(inputs.runner) }}
 
     steps:
       - name: Checkout Flutter
