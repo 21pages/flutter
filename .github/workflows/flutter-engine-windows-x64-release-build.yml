@@ -6,7 +6,7 @@ on:
       runner:
         description: Self-hosted runner labels for the Windows engine build.
         required: true
-        default: '["self-hosted","windows","vs2019"]'
+        default: '["self-hosted","Windows","X64"]'
       vs_installation_path:
         description: Visual Studio installation path on the runner.
         required: true
