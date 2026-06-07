@@ -31,6 +31,13 @@ flutter::Size ClampToVirtualScreen(flutter::Size size) {
                        std::clamp(size.height(), 0.0, virtual_screen_height));
 }
 
+// Window attribute that controls system backdrop effects.
+//
+// Redefined in case the developer's machine has a Windows SDK older than
+// version 10.0.22000.0.
+#ifndef DWMWA_SYSTEMBACKDROP_TYPE
+#define DWMWA_SYSTEMBACKDROP_TYPE 38
+#endif
 void EnableTransparentWindowBackground(HWND hwnd,
                                        flutter::WindowsProcTable const& win32) {
   enum ACCENT_STATE { ACCENT_DISABLED = 0 };

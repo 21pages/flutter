@@ -22,7 +22,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
 import gn_helpers
 
 SCRIPT_DIR = os.path.dirname(__file__)
-SDK_VERSION = '10.0.22621.0'
+SDK_VERSION = os.environ.get('ENGINE_WINDOWS_SDK_VERSION', '10.0.22621.0')
 
 
 def _ExtractImportantEnvironment(output_of_set):

@@ -3,34 +3,119 @@ name: Build Flutter Engine
 on:
   workflow_dispatch:
     inputs:
-      runner:
-        description: Runner label for the Windows engine build.
-        required: true
-        default: windows-2022
       vs_installation_path:
-        description: Visual Studio installation path on the runner.
+        description: Visual Studio 2019 Build Tools installation path on the runner.
         required: true
-        default: C:\Program Files\Microsoft Visual Studio\2022\Enterprise
+        default: C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools
 
 permissions:
   contents: write
 
 jobs:
   build-engine:
-    runs-on: ${{ inputs.runner }}
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: powershell
 
     steps:
       - name: Checkout Flutter
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
 
+      - name: Configure Git
+        run: |
+          git config --global core.longpaths true
+          git config --global --get core.longpaths
+
+      - name: Install Visual Studio 2019 Build Tools
+        run: |
+          $vsPath = "${{ inputs.vs_installation_path }}"
+
+          function Test-VS2019V142 {
+            if (-not (Test-Path -LiteralPath $vsPath)) {
+              return $false
+            }
+
+            $vcToolsPath = Join-Path $vsPath "VC\Tools\MSVC"
+            $v142Tools = Get-ChildItem -Path $vcToolsPath -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like "14.2*" } |
+                Select-Object -First 1
+            if ($v142Tools) {
+              Write-Host "Found VS2019 v142 toolchain at $($v142Tools.FullName)"
+              return $true
+            }
+
+            return $false
+          }
+
+          if (Test-VS2019V142) {
+            exit 0
+          }
+
+          $installer = Join-Path $env:RUNNER_TEMP "vs_buildtools_2019.exe"
+          Invoke-WebRequest -Uri "https://aka.ms/vs/16/release/vs_buildtools.exe" -OutFile $installer
+          $installArgs = @(
+            "--quiet",
+            "--wait",
+            "--norestart",
+            "--nocache",
+            "--installPath", "`"$vsPath`"",
+            "--add", "Microsoft.VisualStudio.Workload.VCTools",
+            "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "--add", "Microsoft.VisualStudio.Component.VC.v142.x86.x64",
+            "--add", "Microsoft.VisualStudio.Component.Windows10SDK.19041"
+          )
+          $process = Start-Process -FilePath $installer -ArgumentList $installArgs -Wait -PassThru -WindowStyle Hidden
+
+          $installExitCode = $process.ExitCode
+          Write-Host "Visual Studio 2019 Build Tools installer exit code: $installExitCode"
+          if ($null -eq $installExitCode) {
+            throw "Visual Studio 2019 Build Tools installer did not report an exit code."
+          }
+          if ($installExitCode -ne 0 -and $installExitCode -ne 3010) {
+            throw "Visual Studio 2019 Build Tools install failed with exit code $installExitCode"
+          }
+          if ($installExitCode -eq 3010) {
+            Write-Host "Visual Studio 2019 Build Tools install completed with reboot-required exit code 3010."
+          }
+          if (-not (Test-VS2019V142)) {
+            throw "VS2019 v142 toolchain not found after install: $vsPath"
+          }
+          exit 0
+
       - name: Install Depot Tools
-        uses: newkdev/setup-depot-tools@v1.0.1
+        run: |
+          $depotTools = Join-Path $env:RUNNER_TEMP "depot_tools"
+          if (Test-Path -LiteralPath $depotTools) {
+            Remove-Item -LiteralPath $depotTools -Recurse -Force
+          }
+          New-Item -Path $depotTools -ItemType Directory -Force | Out-Null
+          $zipPath = Join-Path $env:RUNNER_TEMP "depot_tools.zip"
+          Invoke-WebRequest -Uri "https://storage.googleapis.com/chrome-infra/depot_tools.zip" -OutFile $zipPath
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $depotTools -Force
+          $depotTools | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "DEPOT_TOOLS=$depotTools" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Set environment variables
         run: |
           echo "DEPOT_TOOLS_WIN_TOOLCHAIN=0" >> $env:GITHUB_ENV
+          echo "GYP_MSVS_VERSION=2019" >> $env:GITHUB_ENV
           echo "GYP_MSVS_OVERRIDE_PATH=${{ inputs.vs_installation_path }}" >> $env:GITHUB_ENV
           echo "WINDOWSSDKDIR=C:\Program Files (x86)\Windows Kits\10" >> $env:GITHUB_ENV
+          echo "ENGINE_WINDOWS_SDK_VERSION=10.0.19041.0" >> $env:GITHUB_ENV
+
+      - name: Verify Visual Studio 2019 toolchain
+        run: |
+          $vsPath = "${{ inputs.vs_installation_path }}"
+          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+          if (-not (Test-Path -LiteralPath $vcvars)) {
+            throw "vcvarsall.bat not found: $vcvars"
+          }
+
+          cmd /c "`"$vcvars`" amd64 10.0.19041.0 && where cl && cl"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to verify Visual Studio 2019 toolchain"
+          }
 
       - name: Sync engine dependencies
         run: |
