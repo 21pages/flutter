@@ -42,7 +42,12 @@ jobs:
                 Select-Object -First 1
             if ($v142Tools) {
               Write-Host "Found VS2019 v142 toolchain at $($v142Tools.FullName)"
-              return $true
+              $atlLib = Join-Path $v142Tools.FullName "atlmfc\lib\x64\atls.lib"
+              if (Test-Path -LiteralPath $atlLib) {
+                Write-Host "Found VS2019 ATL library at $atlLib"
+                return $true
+              }
+              Write-Host "VS2019 ATL library not found at $atlLib"
             }
 
             return $false
@@ -63,6 +68,7 @@ jobs:
             "--add", "Microsoft.VisualStudio.Workload.VCTools",
             "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
             "--add", "Microsoft.VisualStudio.Component.VC.v142.x86.x64",
+            "--add", "Microsoft.VisualStudio.Component.VC.ATL",
             "--add", "Microsoft.VisualStudio.Component.Windows10SDK.19041"
           )
           $process = Start-Process -FilePath $installer -ArgumentList $installArgs -Wait -PassThru -WindowStyle Hidden
@@ -79,7 +85,7 @@ jobs:
             Write-Host "Visual Studio 2019 Build Tools install completed with reboot-required exit code 3010."
           }
           if (-not (Test-VS2019V142)) {
-            throw "VS2019 v142 toolchain not found after install: $vsPath"
+            throw "VS2019 v142 toolchain or ATL libraries not found after install: $vsPath"
           }
           exit 0
 
@@ -148,7 +154,7 @@ jobs:
         working-directory: engine/src
         run: |
           python .\flutter\tools\gn --runtime-mode=release --no-prebuilt-dart-sdk
-          ninja -C .\out\host_release
+          ninja -C .\out\host_release windows gen_snapshot flutter/build/archives:windows_flutter
 
       - name: Verify Windows 7 compatible imports
         working-directory: engine/src
@@ -160,7 +166,7 @@ jobs:
 
           $binaries = @(
             ".\out\host_release\flutter_windows.dll",
-            ".\out\host_release\gen_snapshot.exe"
+            ".\out\host_release\gen_snapshot\gen_snapshot.exe"
           )
           $blockedImports = @(
             "GetCurrentThreadStackLimits"
@@ -194,27 +200,13 @@ jobs:
         working-directory: engine/src
         run: |
           $outputPath = "${{ github.workspace }}\windows-x64-release.zip"
-          $artifactNames = @(
-            "flutter_windows.dll",
-            "flutter_windows.dll.pdb",
-            "flutter_windows.dll.exp",
-            "flutter_windows.dll.lib",
-            "flutter_windows.h",
-            "flutter_export.h",
-            "flutter_messenger.h",
-            "flutter_plugin_registrar.h",
-            "flutter_texture_registrar.h",
-            "license.windows_flutter.md",
-            "gen_snapshot.exe"
-          )
-          $filesToCompress = Get-ChildItem -Path ".\out\host_release" |
-              Where-Object { $_.Name -in $artifactNames }
-          $filesToCompressPaths = $filesToCompress.FullName
-          if ($filesToCompressPaths) {
-            Compress-Archive -Path $filesToCompressPaths -DestinationPath $outputPath -Force
-          } else {
-            Write-Error "Build output files not found!"
+          $archive = ".\out\host_release\zip_archives\windows-x64-release\windows-x64-flutter.zip"
+          if (-not (Test-Path -LiteralPath $archive)) {
+            Get-ChildItem -Path ".\out\host_release\zip_archives" -Recurse -Filter "*.zip" -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "Found archive: $($_.FullName)" }
+            throw "Build archive not found: $archive"
           }
+          Copy-Item -LiteralPath $archive -Destination $outputPath -Force
 
       - name: Upload files to a GitHub release
         uses: svenstaro/upload-release-action@2.9.0
