@@ -150,6 +150,10 @@ jobs:
         run: |
           powershell -ExecutionPolicy Bypass -File "engine\scripts\apply_windows7_dart_patches.ps1"
 
+      - name: Apply Windows 7 atomic wait shim
+        run: |
+          powershell -ExecutionPolicy Bypass -File "engine\scripts\apply_windows7_atomic_wait_shim.ps1"
+
       - name: Build Flutter engine
         working-directory: engine/src
         run: |
@@ -164,32 +168,143 @@ jobs:
             $readobj = "llvm-readobj"
           }
 
-          $binaries = @(
-            ".\out\host_release\flutter_windows.dll",
-            ".\out\host_release\gen_snapshot\gen_snapshot.exe"
+          function Test-IsRuntimeDll {
+            param([string]$Name)
+
+            return $Name -like "api-ms-win-*.dll" -or
+                $Name -ieq "ucrtbase.dll" -or
+                $Name -ieq "ucrtbased.dll" -or
+                $Name -like "vcruntime*.dll" -or
+                $Name -like "msvcp*.dll" -or
+                $Name -like "concrt*.dll"
+          }
+
+          function Write-DllInventory {
+            param(
+              [string]$Title,
+              [System.IO.FileInfo[]]$Files
+            )
+
+            Write-Host ""
+            Write-Host $Title
+            if ($Files.Count -eq 0) {
+              Write-Host "  (none)"
+              return
+            }
+
+            foreach ($file in ($Files | Sort-Object FullName)) {
+              $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($file.FullName)
+              "{0,-45} {1,12} {2}" -f $file.Name, $file.Length, $versionInfo.FileVersion
+            }
+          }
+
+          $outputDir = ".\out\host_release"
+          if (-not (Test-Path -LiteralPath $outputDir)) {
+            throw "Build output directory not found: $outputDir"
+          }
+
+          $archive = ".\out\host_release\zip_archives\windows-x64-release\windows-x64-flutter.zip"
+          if (-not (Test-Path -LiteralPath $archive)) {
+            throw "Build archive not found: $archive"
+          }
+
+          $verifyDir = Join-Path $env:RUNNER_TEMP "windows-x64-flutter-verify"
+          if (Test-Path -LiteralPath $verifyDir) {
+            Remove-Item -LiteralPath $verifyDir -Recurse -Force
+          }
+          New-Item -Path $verifyDir -ItemType Directory -Force | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $verifyDir -Force
+
+          $outputRuntimeDlls = @(Get-ChildItem -LiteralPath $outputDir -File |
+              Where-Object { Test-IsRuntimeDll $_.Name } |
+              Sort-Object FullName)
+          Write-DllInventory "Runtime DLLs present in out/host_release (build output, not necessarily packaged):" $outputRuntimeDlls
+
+          $packageDlls = @(Get-ChildItem -LiteralPath $verifyDir -Recurse -File |
+              Where-Object { $_.Extension -eq ".dll" } |
+              Sort-Object FullName)
+          Write-DllInventory "DLLs present in windows-x64-flutter.zip:" $packageDlls
+
+          $binaries = @(Get-ChildItem -LiteralPath $verifyDir -Recurse -File |
+              Where-Object { $_.Extension -in @(".exe", ".dll") } |
+              Sort-Object FullName)
+          if ($binaries.Count -eq 0) {
+            throw "No exe/dll outputs found in extracted archive: $archive"
+          }
+
+          $requiredBinaries = @(
+            (Join-Path $verifyDir "flutter_windows.dll"),
+            (Join-Path $verifyDir "gen_snapshot.exe")
           )
+          foreach ($requiredBinary in $requiredBinaries) {
+            if (-not (Test-Path -LiteralPath $requiredBinary)) {
+              throw "Required archive binary not found: $requiredBinary"
+            }
+          }
+
           $blockedImports = @(
-            "GetCurrentThreadStackLimits"
+            "GetCurrentThreadStackLimits",
+            "WaitOnAddress",
+            "WakeByAddressSingle",
+            "WakeByAddressAll"
+          )
+          $blockedDlls = @(
+            "api-ms-win-core-synch-l1-2-0.dll"
           )
 
           $failed = $false
+          $archiveFileNames = @{}
           foreach ($binary in $binaries) {
-            if (-not (Test-Path -LiteralPath $binary)) {
-              throw "Build output not found: $binary"
-            }
+            $archiveFileNames[$binary.Name.ToLowerInvariant()] = $true
+          }
 
-            $imports = & $readobj --coff-imports $binary 2>&1 | Out-String
+          foreach ($binary in $binaries) {
+            $binaryPath = $binary.FullName
+            $isRuntimeDll = Test-IsRuntimeDll $binary.Name
+
+            $imports = & $readobj --coff-imports $binaryPath 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) {
               Write-Host $imports
-              throw "Failed to read imports for $binary"
+              throw "Failed to read imports for $binaryPath"
             }
 
-            foreach ($blockedImport in $blockedImports) {
-              if ($imports -match "Symbol:\s+$([regex]::Escape($blockedImport))\b") {
-                Write-Error "$binary imports $blockedImport, which is not available on Windows 7."
-                $failed = $true
+            foreach ($blockedDll in $blockedDlls) {
+              if ($imports -match "Name:\s+$([regex]::Escape($blockedDll))\b") {
+                if ($isRuntimeDll) {
+                  Write-Warning "$binaryPath imports $blockedDll as part of the VC++/UCRT runtime set."
+                  if (-not $archiveFileNames.ContainsKey($blockedDll.ToLowerInvariant())) {
+                    Write-Host "::error::$binaryPath imports $blockedDll, but that API-set DLL is not present in the archive. Do not deploy only ucrtbase.dll; deploy a complete matching VC++/UCRT runtime set or install the redist on Windows 7."
+                    $failed = $true
+                  }
+                } else {
+                  Write-Host "::error::$binaryPath imports $blockedDll directly. That indicates engine/application code is still linked to a Windows 8+ API-set instead of using the Win7 shim."
+                  $failed = $true
+                }
               }
             }
+            foreach ($blockedImport in $blockedImports) {
+              if ($imports -match "Symbol:\s+$([regex]::Escape($blockedImport))\b") {
+                if ($isRuntimeDll) {
+                  Write-Warning "$binaryPath imports $blockedImport as part of the VC++/UCRT runtime set."
+                } else {
+                  Write-Host "::error::$binaryPath imports $blockedImport, which is not available on Windows 7."
+                  $failed = $true
+                }
+              }
+            }
+          }
+
+          $flutterWindowsPdb = ".\out\host_release\flutter_windows.dll.pdb"
+          if (Test-Path -LiteralPath $flutterWindowsPdb) {
+            $pdbText = Select-String -LiteralPath $flutterWindowsPdb -Pattern "win7_atomic_wait_shim.obj" -SimpleMatch
+            if ($pdbText) {
+              Write-Host "Confirmed flutter_windows.dll.pdb contains win7_atomic_wait_shim.obj."
+            } else {
+              Write-Host "::error::flutter_windows.dll.pdb does not contain win7_atomic_wait_shim.obj."
+              $failed = $true
+            }
+          } else {
+            Write-Warning "flutter_windows.dll.pdb was not found; skipped shim object evidence check."
           }
 
           if ($failed) {
